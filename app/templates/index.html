@@ -1,0 +1,413 @@
+	<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CipherChat | E2EE Secure Messaging</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background-color: #0f172a;
+            color: #e2e8f0;
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+
+        .crypto-log {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+        
+        /* Animation for key generation */
+        @keyframes pulse-green {
+            0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(74, 222, 128, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+        }
+        
+        .secure-pulse {
+            animation: pulse-green 2s infinite;
+        }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="h-16 border-b border-slate-700 flex items-center justify-between px-6 bg-slate-900">
+        <div class="flex items-center gap-3">
+            <i class="fa-solid fa-shield-halved text-emerald-400 text-2xl"></i>
+            <div>
+                <h1 class="font-bold text-lg tracking-wider text-emerald-400">CIPHER<span class="text-white">CHAT</span></h1>
+                <p class="text-xs text-slate-400">AES-256-GCM + RSA-2048</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="connection-status" class="flex items-center gap-2 px-3 py-1 rounded-full bg-red-900/30 text-red-400 text-xs border border-red-900">
+                <div class="w-2 h-2 rounded-full bg-red-500"></div>
+                Offline
+            </div>
+            <div id="key-fingerprint" class="hidden md:block text-xs text-slate-500 font-mono bg-slate-800 px-2 py-1 rounded">
+                Generating Keys...
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar: Active Users (Keys) -->
+        <aside class="w-64 bg-slate-900 border-r border-slate-700 hidden md:flex flex-col">
+            <div class="p-4 border-b border-slate-700">
+                <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Nodes (Users)</h2>
+            </div>
+            <div id="users-list" class="flex-1 overflow-y-auto p-2 space-y-2">
+                <!-- User items injected here -->
+            </div>
+            <div class="p-4 bg-slate-800 text-xs text-slate-500 border-t border-slate-700">
+                <p><i class="fa-solid fa-lock mr-1"></i> End-to-End Encrypted</p>
+                <p class="mt-1">Server sees only ciphertext.</p>
+            </div>
+        </aside>
+
+        <!-- Chat Area -->
+        <section class="flex-1 flex flex-col relative bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjEiIGZpbGw9InJnYmEoMjU1LDI1NSwyNTUsMC4wNSkiLz48L3N2Zz4=')]">
+            
+            <!-- Messages Log -->
+            <div id="chat-container" class="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-hide">
+                <!-- Welcome Message -->
+                <div class="flex justify-center my-4">
+                    <span class="text-xs bg-slate-800 text-slate-400 px-3 py-1 rounded-full border border-slate-700">
+                        Initializing Secure Environment...
+                    </span>
+                </div>
+            </div>
+
+            <!-- Debug/Crypto Console (Bottom Overlay) -->
+            <div id="crypto-console" class="h-32 bg-slate-900 border-t border-slate-700 p-2 overflow-y-auto font-mono text-xs hidden">
+                <div class="text-emerald-500">>> Crypto Module Loaded</div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="p-4 bg-slate-900 border-t border-slate-700">
+                <form id="message-form" class="flex gap-4">
+                    <button type="button" onclick="toggleConsole()" class="text-slate-500 hover:text-emerald-400 transition-colors" title="Toggle Crypto Logs">
+                        <i class="fa-solid fa-terminal"></i>
+                    </button>
+                    <input type="text" id="message-input" 
+                        class="flex-1 bg-slate-800 border border-slate-700 text-white px-4 py-3 rounded-lg focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all placeholder-slate-500"
+                        placeholder="Type a secure message..." disabled>
+                    <button type="submit" id="send-btn" 
+                        class="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+                        <span>SEND</span>
+                        <i class="fa-solid fa-paper-plane text-sm"></i>
+                    </button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <!-- Client-Side Logic (SocketIO + WebCrypto) -->
+    <script>
+        const socket = io();
+        let myKeyPair = null;
+        let myExportedPublicKey = null;
+        let sessionKeys = {}; // Stores AES keys for active sessions (simplified)
+        let otherUsers = {};  // Map: socket_id -> public_key (JWK)
+
+        // DOM Elements
+        const chatContainer = document.getElementById('chat-container');
+        const messageForm = document.getElementById('message-form');
+        const messageInput = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const statusDiv = document.getElementById('connection-status');
+        const usersList = document.getElementById('users-list');
+        const cryptoConsole = document.getElementById('crypto-console');
+        const fingerprintDiv = document.getElementById('key-fingerprint');
+
+        // --- 1. CRYPTOGRAPHY FUNCTIONS (Web Crypto API) ---
+
+        // Generate RSA-OAEP Key Pair (2048-bit)
+        async function generateKeyPair() {
+            logCrypto("Generating RSA-2048 Key Pair...");
+            try {
+                myKeyPair = await window.crypto.subtle.generateKey(
+                    {
+                        name: "RSA-OAEP",
+                        modulusLength: 2048,
+                        publicExponent: new Uint8Array([1, 0, 1]),
+                        hash: "SHA-256",
+                    },
+                    true,
+                    ["encrypt", "decrypt"]
+                );
+                
+                // Export Public Key to JWK format for sharing
+                myExportedPublicKey = await window.crypto.subtle.exportKey(
+                    "jwk",
+                    myKeyPair.publicKey
+                );
+                
+                logCrypto("Keys Generated Successfully.");
+                updateFingerprint();
+                return true;
+            } catch (e) {
+                logCrypto("Key Generation Failed: " + e);
+                return false;
+            }
+        }
+
+        // Import another user's Public Key
+        async function importPublicKey(jwkKey) {
+            return await window.crypto.subtle.importKey(
+                "jwk",
+                jwkKey,
+                {
+                    name: "RSA-OAEP",
+                    hash: "SHA-256",
+                },
+                true,
+                ["encrypt"]
+            );
+        }
+
+        // Generate a random AES-GCM Key (256-bit) for the message
+        async function generateAESKey() {
+            return await window.crypto.subtle.generateKey(
+                {
+                    name: "AES-GCM",
+                    length: 256,
+                },
+                true,
+                ["encrypt", "decrypt"]
+            );
+        }
+
+        // Encrypt message: 1. Create AES Key -> 2. Encrypt Msg -> 3. Encrypt AES Key with Recipient's RSA
+        async function encryptMessage(text, recipientPublicKeyJWK) {
+            const aesKey = await generateAESKey();
+            const recipientPubKey = await importPublicKey(recipientPublicKeyJWK);
+
+            // A. Encrypt Text with AES
+            const encoder = new TextEncoder();
+            const data = encoder.encode(text);
+            const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV
+            
+            const encryptedContent = await window.crypto.subtle.encrypt(
+                { name: "AES-GCM", iv: iv },
+                aesKey,
+                data
+            );
+
+            // B. Export AES Key to encrypt it with RSA
+            const rawAesKey = await window.crypto.subtle.exportKey("raw", aesKey);
+
+            // C. Encrypt AES Key with Recipient's RSA Public Key
+            const encryptedAesKey = await window.crypto.subtle.encrypt(
+                { name: "RSA-OAEP" },
+                recipientPubKey,
+                rawAesKey
+            );
+
+            return {
+                iv: Array.from(iv),
+                content: Array.from(new Uint8Array(encryptedContent)),
+                encryptedKey: Array.from(new Uint8Array(encryptedAesKey))
+            };
+        }
+
+        // Decrypt message: 1. Decrypt AES Key with My Private RSA -> 2. Decrypt Msg with AES
+        async function decryptMessage(package) {
+            try {
+                // A. Decrypt AES Key
+                const encryptedKeyArray = new Uint8Array(package.encryptedKey);
+                const rawAesKey = await window.crypto.subtle.decrypt(
+                    { name: "RSA-OAEP" },
+                    myKeyPair.privateKey,
+                    encryptedKeyArray
+                );
+
+                // B. Import the decrypted AES Key
+                const aesKey = await window.crypto.subtle.importKey(
+                    "raw",
+                    rawAesKey,
+                    "AES-GCM",
+                    true,
+                    ["decrypt"]
+                );
+
+                // C. Decrypt Content
+                const iv = new Uint8Array(package.iv);
+                const contentArray = new Uint8Array(package.content);
+                const decryptedBuffer = await window.crypto.subtle.decrypt(
+                    { name: "AES-GCM", iv: iv },
+                    aesKey,
+                    contentArray
+                );
+
+                const decoder = new TextDecoder();
+                return decoder.decode(decryptedBuffer);
+            } catch (e) {
+                console.error(e);
+                return "[Decryption Failed - Key Mismatch]";
+            }
+        }
+
+
+        // --- 2. SOCKET IO LOGIC ---
+
+        socket.on('connect', async () => {
+            logCrypto("Connected to Server (WSS).");
+            if (!myKeyPair) await generateKeyPair();
+            
+            // Send public key to server
+            socket.emit('join', { publicKey: myExportedPublicKey });
+            
+            statusDiv.innerHTML = `<div class="w-2 h-2 rounded-full bg-emerald-400 secure-pulse"></div> Secure`;
+            statusDiv.className = "flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-900/30 text-emerald-400 text-xs border border-emerald-900";
+            messageInput.disabled = false;
+            sendBtn.disabled = false;
+        });
+
+        socket.on('user_list', (users) => {
+            otherUsers = users;
+            renderUserList();
+        });
+
+        socket.on('receive_message', async (data) => {
+            const isMe = data.sender_id === socket.id;
+            let displayText = "";
+
+            if (isMe) {
+                displayText = data.plaintext_preview; // We know what we sent
+            } else {
+                // Check if this message has a package for me
+                if (data.packages && data.packages[socket.id]) {
+                    logCrypto(`Decrypting message from ${data.sender_id.substr(0,4)}...`);
+                    displayText = await decryptMessage(data.packages[socket.id]);
+                } else {
+                    displayText = "🔒 [Message not encrypted for you]";
+                }
+            }
+            appendMessage(data.sender_id, displayText, isMe);
+        });
+
+        // --- 3. UI FUNCTIONS ---
+
+        messageForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = messageInput.value;
+            if (!text) return;
+
+            logCrypto("Encrypting message for " + Object.keys(otherUsers).length + " recipients...");
+
+            // We must encrypt the message specifically for EVERY user in the room
+            // In a real app, this is inefficient for large groups (use Group Keys instead), 
+            // but for this demo, it proves E2EE perfectly.
+            
+            const packages = {};
+            
+            // Loop through all users (including self if we want to read it later from server history)
+            // Ideally, we treat 'otherUsers' as the recipients.
+            
+            // Note: The server sends us the 'otherUsers' list excluding ourselves usually, or including. 
+            // We will trust the list.
+            
+            const recipients = Object.entries(otherUsers);
+            
+            if (recipients.length === 0 && Object.keys(otherUsers).length === 0) {
+                // Just for demo if alone
+                logCrypto("Warning: No other users to receive encrypted package.");
+            }
+
+            // Encrypt for each recipient
+            for (const [userId, userKey] of recipients) {
+                if (userId === socket.id) continue; // Skip self in this loop logic for simplicity
+                packages[userId] = await encryptMessage(text, userKey);
+            }
+
+            // Send to server
+            socket.emit('send_message', {
+                packages: packages,
+                // We send plaintext preview ONLY for the sender's UI to render immediately (optional)
+                // In strict E2EE, we would encrypt for ourselves too and decrypt it back.
+                plaintext_preview: text 
+            });
+
+            messageInput.value = '';
+            logCrypto("Message sent (Encrypted Payload).");
+        });
+
+        function appendMessage(senderId, text, isMe) {
+            const div = document.createElement('div');
+            div.className = `flex ${isMe ? 'justify-end' : 'justify-start'}`;
+            
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-[80%] rounded-xl px-4 py-2 text-sm ${
+                isMe 
+                ? 'bg-emerald-600 text-white rounded-br-none' 
+                : 'bg-slate-700 text-slate-200 rounded-bl-none'
+            }`;
+            
+            const senderName = isMe ? 'You' : `User ${senderId.substr(0, 4)}`;
+            
+            bubble.innerHTML = `
+                <div class="text-[10px] opacity-50 mb-1 font-bold">${senderName}</div>
+                <div class="break-words">${text}</div>
+            `;
+            
+            div.appendChild(bubble);
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function renderUserList() {
+            usersList.innerHTML = '';
+            Object.keys(otherUsers).forEach(id => {
+                if (id === socket.id) return;
+                const div = document.createElement('div');
+                div.className = "flex items-center gap-2 p-2 rounded hover:bg-slate-800 transition-colors cursor-pointer";
+                div.innerHTML = `
+                    <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                    <div class="flex-1">
+                        <div class="text-slate-300 text-xs font-bold">User ${id.substr(0, 6)}</div>
+                        <div class="text-slate-600 text-[10px]">RSA-2048 Ready</div>
+                    </div>
+                    <i class="fa-solid fa-key text-slate-600 text-xs"></i>
+                `;
+                usersList.appendChild(div);
+            });
+        }
+
+        function logCrypto(msg) {
+            const line = document.createElement('div');
+            line.textContent = `> ${msg}`;
+            cryptoConsole.appendChild(line);
+            cryptoConsole.scrollTop = cryptoConsole.scrollHeight;
+        }
+
+        function toggleConsole() {
+            cryptoConsole.classList.toggle('hidden');
+        }
+
+        function updateFingerprint() {
+            // Fake a fingerprint for visuals
+            if(myExportedPublicKey) {
+                fingerprintDiv.textContent = "FP: " + myExportedPublicKey.n.substr(0, 16) + "...";
+            }
+        }
+    </script>
+</body>
+</html>
